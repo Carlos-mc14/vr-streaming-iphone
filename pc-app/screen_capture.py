@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenCapture:
+        def set_virtual_camera_orientation(self, quat):
+            """Stub: Recibe orientación de cámara (cuaternion) desde el iPhone para tracking de cabeza."""
+            # Aquí deberías integrar con tu motor de renderizado 3D si tienes uno.
+            # Si solo capturas la pantalla, ignora esto o implementa integración con OBS/Unity/etc.
+            pass
     """
     High-performance screen capture class.
     Uses dxcam on Windows for best performance, falls back to mss.

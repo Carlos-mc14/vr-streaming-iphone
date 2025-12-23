@@ -1,6 +1,6 @@
 {
     "video": {
-        "capture_fps": 60,
+        "capture_fps": 120,
         "output_resolution": {
             "width": 1920,
             "height": 1080
@@ -15,7 +15,7 @@
         "eye_separation": 63.0,
         "fov": 100,
         "barrel_distortion": {
-            "enabled": true,
+            "enabled": false,
             "k1": 0.22,
             "k2": 0.24
         }

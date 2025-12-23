@@ -321,9 +321,15 @@ class VRStreamingApp:
                 self.gui.set_connection_status(state.value)
         
         def on_sensor_data(sensor_data):
-            # Process sensor data
+            # Procesar datos de sensor y actualizar cámara virtual
             self.sensor_processor.process_sensor_data(sensor_data)
-            
+            if self.screen_capture and hasattr(self.screen_capture, 'set_virtual_camera_orientation'):
+                try:
+                    # Si el capturador soporta orientación virtual, actualizarla
+                    quat = sensor_data.orientation
+                    self.screen_capture.set_virtual_camera_orientation(quat)
+                except Exception as e:
+                    logger.error(f"Error al actualizar orientación virtual: {e}")
             # Update sensor rate metric
             self._sensor_count += 1
             current_time = time.time()

@@ -37,7 +37,7 @@ class MetalRenderer {
     
     // MARK: - Distortion Parameters
     
-    private var distortionEnabled: Bool = true
+    private var distortionEnabled: Bool = false // Solo el PC aplica barrel distortion
     private var distortionK1: Float = 0.22
     private var distortionK2: Float = 0.24
     
@@ -317,9 +317,9 @@ class MetalRenderer {
         
         // Update uniforms
         var uniforms = Uniforms(
-            distortionEnabled: enableBarrelDistortion ? 1 : 0,
-            k1: distortionK1,
-            k2: distortionK2,
+            distortionEnabled: 0, // Nunca aplicar barrel distortion en iOS
+            k1: 0,
+            k2: 0,
             padding: 0,
             leftEyeCenter: SIMD2<Float>(0.25, 0.5),
             rightEyeCenter: SIMD2<Float>(0.75, 0.5),

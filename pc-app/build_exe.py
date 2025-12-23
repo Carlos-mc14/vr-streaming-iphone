@@ -21,7 +21,7 @@ def build():
     # Check if PyInstaller is installed
     try:
         import PyInstaller
-        print(f"✓ PyInstaller version: {PyInstaller.__version__}")
+        print(f"[OK] PyInstaller version: {PyInstaller.__version__}")
     except ImportError:
         print("Installing PyInstaller...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
@@ -99,7 +99,7 @@ def build():
         result = subprocess.run(cmd, cwd=script_dir, check=True)
         print()
         print("=" * 60)
-        print("✓ Build completed successfully!")
+        print("[OK] Build completed successfully!")
         print("=" * 60)
         
         exe_path = dist_dir / "VRStreaming.exe"
@@ -113,19 +113,19 @@ def build():
             config_dst = dist_dir / "config.json"
             if config_src.exists():
                 shutil.copy(config_src, config_dst)
-                print(f"✓ Copied config.json to dist folder")
+                print(f"[OK] Copied config.json to dist folder")
             
             # Copy USB setup instructions
             usb_readme = script_dir / "USB_SETUP.md"
             if usb_readme.exists():
                 shutil.copy(usb_readme, dist_dir / "USB_SETUP.md")
-                print(f"✓ Copied USB_SETUP.md to dist folder")
+                print(f"[OK] Copied USB_SETUP.md to dist folder")
             
             # Copy USB dependencies installer
             usb_installer = script_dir / "install_usb_dependencies.bat"
             if usb_installer.exists():
                 shutil.copy(usb_installer, dist_dir / "install_usb_dependencies.bat")
-                print(f"✓ Copied install_usb_dependencies.bat to dist folder")
+                print(f"[OK] Copied install_usb_dependencies.bat to dist folder")
             
             print()
             print("To run: double-click VRStreaming.exe in the 'dist' folder")
@@ -133,7 +133,7 @@ def build():
             print("For USB connection, run install_usb_dependencies.bat as admin")
         
     except subprocess.CalledProcessError as e:
-        print(f"\n✗ Build failed with error code {e.returncode}")
+        print(f"\n[FAIL] Build failed with error code {e.returncode}")
         sys.exit(1)
 
 if __name__ == "__main__":

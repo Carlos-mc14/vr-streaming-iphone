@@ -62,6 +62,16 @@ def setup_logging(log_level: str = "INFO", save_logs: bool = True):
 logger = logging.getLogger(__name__)
 
 
+def get_app_path() -> Path:
+    """Get the path to the application directory (works with PyInstaller)."""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        return Path(sys.executable).parent
+    else:
+        # Running as script
+        return Path(__file__).parent
+
+
 class VRStreamingApp:
     """
     Main VR Streaming Application.
@@ -75,7 +85,9 @@ class VRStreamingApp:
         Args:
             config_path: Path to configuration file
         """
-        self.config_path = Path(config_path)
+        # Look for config in the app directory (not the bundled resources)
+        app_dir = get_app_path()
+        self.config_path = app_dir / config_path
         self.config = self._load_config()
         
         # Setup logging
@@ -120,17 +132,7 @@ class VRStreamingApp:
     
     def _load_config(self) -> dict:
         """Load configuration from file."""
-        try:
-            if self.config_path.exists():
-                with open(self.config_path, 'r') as f:
-                    config = json.load(f)
-                    logger.info(f"Configuration loaded from {self.config_path}")
-                    return config
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-        
-        # Default configuration
-        return {
+        default_config = {
             "video": {
                 "capture_fps": 60,
                 "output_resolution": {"width": 1920, "height": 1080},
@@ -150,12 +152,12 @@ class VRStreamingApp:
                 }
             },
             "connection": {
-                "mode": "usb",
+                "mode": "wifi",
                 "usb_port": 8889,
                 "wifi_host": "0.0.0.0",
                 "wifi_port": 8889,
                 "buffer_size": 65536,
-                "enable_usb_tunnel": True
+                "enable_usb_tunnel": False
             },
             "sensor_processing": {
                 "sensitivity": {"yaw": 2.0, "pitch": 1.5, "roll": 1.0},
@@ -177,13 +179,30 @@ class VRStreamingApp:
                 "save_logs": True
             }
         }
+        
+        try:
+            if self.config_path.exists():
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    logger.info(f"Configuration loaded from {self.config_path}")
+                    return config
+            else:
+                # Create default config file if it doesn't exist
+                logger.info(f"Creating default config at {self.config_path}")
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=4)
+                return default_config
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+        
+        return default_config
     
     def _save_config(self):
         """Save current configuration."""
         try:
-            with open(self.config_path, 'w') as f:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4)
-            logger.info("Configuration saved")
+            logger.info(f"Configuration saved to {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
     

@@ -1,8 +1,16 @@
 """
-VR Streaming - USB Connection Module
-=====================================
-Handles USB connection detection and network interface discovery.
-Provides connection options for USB cable and WiFi connections.
+VR Streaming - USB Tunnel Module
+=================================
+Creates a USB tunnel for iPhone-to-PC communication.
+
+For USB connection to work, the iPhone app connects via WiFi-style connection
+to the PC's IP address. With USB cable, the connection is more stable.
+
+Alternative approach using iproxy (if installed):
+1. PC runs server on port 8889
+2. iproxy creates tunnel: iPhone localhost:8889 -> PC port 8889
+3. iPhone app connects to 127.0.0.1:8889
+4. Traffic goes through USB cable
 
 Author: VR Streaming Project
 License: MIT
@@ -11,16 +19,19 @@ License: MIT
 import socket
 import subprocess
 import sys
+import os
 import time
 import threading
 import logging
-from typing import Optional, Callable, List, Dict, Any, Tuple
+import shutil
+from typing import Optional, Callable, List
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Try to import pymobiledevice3
+# Try to import pymobiledevice3 for device detection
 PYMOBILEDEVICE3_AVAILABLE = False
 try:
     from pymobiledevice3.usbmux import list_devices
@@ -30,12 +41,27 @@ try:
 except ImportError as e:
     logger.debug(f"pymobiledevice3 not available: {e}")
 
+# Try to import pymobiledevice3's tunnel/forwarder
+TUNNEL_AVAILABLE = False
+try:
+    from pymobiledevice3.services.dvt.dvt_secure_socket_proxy import DvtSecureSocketProxyService
+    from pymobiledevice3.tcp_forwarder import TcpForwarder
+    TUNNEL_AVAILABLE = True
+    logger.info("pymobiledevice3 TCP forwarder available")
+except ImportError:
+    try:
+        # Alternative import path
+        from pymobiledevice3.tcp_forwarder import TcpForwarder  
+        TUNNEL_AVAILABLE = True
+    except ImportError as e:
+        logger.debug(f"TCP forwarder not available: {e}")
+
 
 class USBDeviceState(Enum):
     """USB device connection state."""
     NOT_FOUND = "not_found"
     FOUND = "found"
-    CONNECTED = "connected"
+    TUNNEL_ACTIVE = "tunnel_active"
     ERROR = "error"
 
 
@@ -46,7 +72,7 @@ class iOSDevice:
     name: str
     model: str
     ios_version: str
-    connection_type: str  # "USB" or "Network"
+    connection_type: str
     
     @classmethod
     def from_lockdown(cls, lockdown) -> 'iOSDevice':
@@ -63,191 +89,16 @@ class iOSDevice:
             logger.error(f"Failed to get device info: {e}")
             return cls(
                 udid=getattr(lockdown, 'udid', 'unknown'),
-                name="Unknown",
-                model="Unknown",
+                name="Unknown Device",
+                model="iPhone",
                 ios_version="Unknown",
                 connection_type="USB"
             )
 
 
-class USBTunnel:
-    """
-    Manages USB connection detection and provides connection options.
-    
-    This module detects iOS devices connected via USB and provides
-    the appropriate IP addresses for connection.
-    """
-    
-    def __init__(
-        self,
-        local_port: int = 8889,
-        on_device_connected: Optional[Callable[['iOSDevice'], None]] = None,
-        on_device_disconnected: Optional[Callable[[], None]] = None,
-        on_tunnel_ready: Optional[Callable[[str, int], None]] = None
-    ):
-        """
-        Initialize USB connection manager.
-        
-        Args:
-            local_port: Local port for streaming
-            on_device_connected: Callback when device connects
-            on_device_disconnected: Callback when device disconnects
-            on_tunnel_ready: Callback when connection is ready
-        """
-        self.local_port = local_port
-        self._on_device_connected = on_device_connected
-        self._on_device_disconnected = on_device_disconnected
-        self._on_tunnel_ready = on_tunnel_ready
-        
-        self.state = USBDeviceState.NOT_FOUND
-        self.current_device: Optional[iOSDevice] = None
-        
-        # Thread state
-        self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
-        
-        logger.info(f"USBTunnel initialized, port={local_port}")
-    
-    def start(self):
-        """Start monitoring for USB devices."""
-        if self._running:
-            logger.warning("USB monitor already running")
-            return
-        
-        self._running = True
-        
-        # Start device monitor thread
-        self._monitor_thread = threading.Thread(
-            target=self._device_monitor_loop,
-            name="USBDeviceMonitor",
-            daemon=True
-        )
-        self._monitor_thread.start()
-        
-        logger.info("USB device monitoring started")
-    
-    def stop(self):
-        """Stop the USB monitoring."""
-        self._running = False
-        
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=2.0)
-        
-        logger.info("USB monitoring stopped")
-    
-    def _device_monitor_loop(self):
-        """Monitor for USB device connections."""
-        last_device_udid = None
-        
-        while self._running:
-            try:
-                devices = self._get_usb_devices()
-                
-                if devices:
-                    device = devices[0]  # Use first device
-                    
-                    if last_device_udid != device.udid:
-                        # New device connected
-                        logger.info(f"iOS device connected: {device.name} ({device.model})")
-                        self.current_device = device
-                        self.state = USBDeviceState.CONNECTED
-                        last_device_udid = device.udid
-                        
-                        if self._on_device_connected:
-                            try:
-                                self._on_device_connected(device)
-                            except Exception as e:
-                                logger.error(f"Device connected callback error: {e}")
-                        
-                        # Signal that connection is ready
-                        if self._on_tunnel_ready:
-                            local_ip = get_local_ip()
-                            self._on_tunnel_ready(local_ip, self.local_port)
-                else:
-                    if last_device_udid is not None:
-                        # Device disconnected
-                        logger.info("iOS device disconnected")
-                        self.current_device = None
-                        self.state = USBDeviceState.NOT_FOUND
-                        last_device_udid = None
-                        
-                        if self._on_device_disconnected:
-                            try:
-                                self._on_device_disconnected()
-                            except Exception as e:
-                                logger.error(f"Device disconnected callback error: {e}")
-                
-                time.sleep(2.0)  # Check every 2 seconds
-                
-            except Exception as e:
-                logger.error(f"Device monitor error: {e}")
-                time.sleep(5.0)
-    
-    def _get_usb_devices(self) -> List[iOSDevice]:
-        """Get list of connected USB iOS devices."""
-        devices = []
-        
-        if not PYMOBILEDEVICE3_AVAILABLE:
-            return devices
-        
-        try:
-            # Get devices via usbmux
-            usbmux_devices = list_devices()
-            
-            for dev in usbmux_devices:
-                try:
-                    # Create lockdown client to get device info
-                    lockdown = create_using_usbmux(serial=dev.serial)
-                    device = iOSDevice.from_lockdown(lockdown)
-                    devices.append(device)
-                    
-                except Exception as e:
-                    logger.debug(f"Could not get device info: {e}")
-                    devices.append(iOSDevice(
-                        udid=dev.serial if hasattr(dev, 'serial') else 'unknown',
-                        name="iOS Device",
-                        model="Unknown",
-                        ios_version="Unknown",
-                        connection_type="USB"
-                    ))
-            
-        except Exception as e:
-            logger.debug(f"Error listing devices: {e}")
-        
-        return devices
-    
-    def get_connection_info(self) -> Dict[str, Any]:
-        """Get current connection information."""
-        local_ip = get_local_ip()
-        
-        info = {
-            'state': self.state.value,
-            'device': None,
-            'local_ip': local_ip,
-            'port': self.local_port,
-            'pymobiledevice3_available': PYMOBILEDEVICE3_AVAILABLE,
-            'connection_options': get_all_connection_options(self.local_port)
-        }
-        
-        if self.current_device:
-            info['device'] = {
-                'name': self.current_device.name,
-                'model': self.current_device.model,
-                'ios_version': self.current_device.ios_version,
-                'udid': self.current_device.udid[:8] + '...' if self.current_device.udid else None
-            }
-        
-        return info
-    
-    def has_device(self) -> bool:
-        """Check if any device is connected."""
-        return self.current_device is not None
-
-
 def get_local_ip() -> str:
-    """Get primary local IP address for network connection."""
+    """Get the local IP address of this machine."""
     try:
-        # Create a socket to determine local IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
@@ -257,184 +108,446 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 
-def get_all_network_ips() -> List[Tuple[str, str]]:
-    """Get all available network IP addresses with their interface names."""
-    ips = []
+def find_iproxy() -> Optional[str]:
+    """Find iproxy executable."""
+    # Check if iproxy is in PATH
+    iproxy_path = shutil.which("iproxy")
+    if iproxy_path:
+        return iproxy_path
     
+    # Check common installation paths on Windows
+    common_paths = [
+        r"C:\Program Files\libimobiledevice\iproxy.exe",
+        r"C:\Program Files (x86)\libimobiledevice\iproxy.exe",
+        r"C:\ProgramData\chocolatey\bin\iproxy.exe",
+        os.path.join(os.path.dirname(sys.executable), "iproxy.exe"),
+        os.path.join(os.path.dirname(__file__), "iproxy.exe"),
+        os.path.join(os.path.dirname(__file__), "tools", "iproxy.exe"),
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+
+def check_usb_dependencies() -> dict:
+    """Check if USB dependencies are available."""
+    result = {
+        'pymobiledevice3': PYMOBILEDEVICE3_AVAILABLE,
+        'iproxy': find_iproxy() is not None,
+        'iproxy_path': find_iproxy(),
+        'itunes_drivers': False,
+        'device_detected': False
+    }
+    
+    # Check for iTunes/Apple Mobile Device drivers
     try:
-        # Use socket to get hostname and addresses
-        hostname = socket.gethostname()
-        
-        # Try to get all addresses
-        try:
-            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                ip = info[4][0]
-                if ip and ip != '127.0.0.1' and not ip.startswith('169.254'):
-                    ips.append(("Network", ip))
-        except Exception:
-            pass
-        
-        # Also try ifaddr if available
-        try:
-            import ifaddr
-            adapters = ifaddr.get_adapters()
-            for adapter in adapters:
-                for ip_obj in adapter.ips:
-                    if isinstance(ip_obj.ip, str):  # IPv4
-                        ip = ip_obj.ip
-                        if ip and ip != '127.0.0.1' and not ip.startswith('169.254'):
-                            name = adapter.nice_name
-                            if ip not in [i[1] for i in ips]:
-                                ips.append((name, ip))
-        except ImportError:
-            pass
-            
+        if PYMOBILEDEVICE3_AVAILABLE:
+            devices = list_devices()
+            result['itunes_drivers'] = True
+            result['device_detected'] = len(devices) > 0
     except Exception as e:
-        logger.debug(f"Error getting network IPs: {e}")
+        logger.debug(f"Driver check failed: {e}")
     
-    # Add localhost as fallback
-    if not ips:
-        ips.append(("Localhost", "127.0.0.1"))
-    
-    return ips
+    return result
 
 
-def get_all_connection_options(port: int = 8889) -> List[Dict[str, str]]:
-    """Get all available connection options for the iOS app."""
+class USBTunnel:
+    """
+    Creates a USB tunnel for iPhone-to-PC communication.
+    
+    Uses iproxy to forward connections from iPhone's localhost
+    to the PC's streaming server.
+    """
+    
+    def __init__(
+        self,
+        local_port: int = 8889,
+        device_port: int = 8889,
+        on_device_connected: Optional[Callable[['iOSDevice'], None]] = None,
+        on_device_disconnected: Optional[Callable[[], None]] = None,
+        on_tunnel_ready: Optional[Callable[[str, int], None]] = None,
+        on_tunnel_error: Optional[Callable[[str], None]] = None
+    ):
+        """
+        Initialize USB tunnel.
+        
+        Args:
+            local_port: Port on PC to forward to
+            device_port: Port on iPhone to listen on
+            on_device_connected: Callback when device connects
+            on_device_disconnected: Callback when device disconnects
+            on_tunnel_ready: Callback when tunnel is active
+            on_tunnel_error: Callback when tunnel fails
+        """
+        self.local_port = local_port
+        self.device_port = device_port
+        self._on_device_connected = on_device_connected
+        self._on_device_disconnected = on_device_disconnected
+        self._on_tunnel_ready = on_tunnel_ready
+        self._on_tunnel_error = on_tunnel_error
+        
+        self.state = USBDeviceState.NOT_FOUND
+        self.current_device: Optional[iOSDevice] = None
+        
+        # iproxy process
+        self._iproxy_process: Optional[subprocess.Popen] = None
+        self._iproxy_path: Optional[str] = None
+        
+        # Thread state
+        self._running = False
+        self._monitor_thread: Optional[threading.Thread] = None
+        
+        logger.info(f"USBTunnel initialized: PC port {local_port} <-> iPhone port {device_port}")
+    
+    def start(self):
+        """Start USB tunnel service."""
+        if self._running:
+            return
+        
+        # Find iproxy
+        self._iproxy_path = find_iproxy()
+        if not self._iproxy_path:
+            logger.warning("iproxy not found - USB tunnel will not work")
+            logger.warning("Install libimobiledevice: choco install libimobiledevice")
+            if self._on_tunnel_error:
+                self._on_tunnel_error("iproxy not found. Install: choco install libimobiledevice")
+        
+        self._running = True
+        
+        # Start device monitor
+        self._monitor_thread = threading.Thread(
+            target=self._device_monitor_loop,
+            name="USBDeviceMonitor",
+            daemon=True
+        )
+        self._monitor_thread.start()
+        
+        logger.info("USB tunnel service started")
+    
+    def stop(self):
+        """Stop USB tunnel service."""
+        self._running = False
+        
+        self._stop_iproxy()
+        
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=2.0)
+        
+        logger.info("USB tunnel service stopped")
+    
+    def _device_monitor_loop(self):
+        """Monitor for USB device connections."""
+        last_device_udid = None
+        
+        while self._running:
+            try:
+                device = self._detect_usb_device()
+                
+                if device:
+                    if last_device_udid != device.udid:
+                        # New device connected
+                        logger.info(f"USB device found: {device.name}")
+                        self.current_device = device
+                        self.state = USBDeviceState.FOUND
+                        last_device_udid = device.udid
+                        
+                        if self._on_device_connected:
+                            self._on_device_connected(device)
+                        
+                        # Start tunnel
+                        self._start_iproxy()
+                else:
+                    if last_device_udid is not None:
+                        # Device disconnected
+                        logger.info("USB device disconnected")
+                        self._stop_iproxy()
+                        self.current_device = None
+                        self.state = USBDeviceState.NOT_FOUND
+                        last_device_udid = None
+                        
+                        if self._on_device_disconnected:
+                            self._on_device_disconnected()
+                
+                time.sleep(2.0)
+                
+            except Exception as e:
+                logger.error(f"Device monitor error: {e}")
+                time.sleep(5.0)
+    
+    def _detect_usb_device(self) -> Optional[iOSDevice]:
+        """Detect connected USB iOS device."""
+        if not PYMOBILEDEVICE3_AVAILABLE:
+            return None
+        
+        try:
+            devices = list_devices()
+            
+            if not devices:
+                return None
+            
+            # Get first USB device
+            for dev in devices:
+                try:
+                    lockdown = create_using_usbmux(serial=dev.serial)
+                    return iOSDevice.from_lockdown(lockdown)
+                except Exception as e:
+                    logger.debug(f"Could not get device info: {e}")
+                    # Return basic info
+                    return iOSDevice(
+                        udid=dev.serial,
+                        name="iPhone",
+                        model="Unknown",
+                        ios_version="Unknown",
+                        connection_type="USB"
+                    )
+        except Exception as e:
+            logger.error(f"Device detection error: {e}")
+        
+        return None
+    
+    def _start_iproxy(self):
+        """Start tunnel for USB port forwarding (iproxy or pymobiledevice3)."""
+        self._stop_iproxy()  # Stop any existing process
+        
+        # Try iproxy first
+        if self._iproxy_path:
+            self._start_iproxy_process()
+            return
+        
+        # Fallback: If pymobiledevice3 has TcpForwarder, use that
+        if TUNNEL_AVAILABLE and self.current_device:
+            self._start_pymobiledevice3_tunnel()
+            return
+        
+        # No tunnel available - notify user but continue (WiFi will work)
+        logger.warning("No USB tunnel method available. Use WiFi connection.")
+        logger.warning("To enable USB tunnel: choco install libimobiledevice")
+        self.state = USBDeviceState.FOUND  # Device found but no tunnel
+        
+        # Still notify that device is connected - WiFi will work
+        if self._on_tunnel_error:
+            self._on_tunnel_error("No USB tunnel available. Connect via WiFi instead.")
+    
+    def _start_iproxy_process(self):
+        """Start iproxy process for USB port forwarding."""
+        try:
+            # iproxy LOCAL_PORT DEVICE_PORT
+            # This makes iPhone's localhost:DEVICE_PORT forward to PC's LOCAL_PORT
+            cmd = [self._iproxy_path, str(self.device_port), str(self.local_port)]
+            
+            logger.info(f"Starting iproxy: {' '.join(cmd)}")
+            
+            # Start iproxy process
+            creationflags = 0
+            if sys.platform == 'win32':
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
+            self._iproxy_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=creationflags
+            )
+            
+            # Wait a bit to see if it started successfully
+            time.sleep(0.5)
+            
+            if self._iproxy_process.poll() is None:
+                # Process is running
+                logger.info(f"USB tunnel active: iPhone:{self.device_port} -> PC:{self.local_port}")
+                self.state = USBDeviceState.TUNNEL_ACTIVE
+                
+                if self._on_tunnel_ready:
+                    self._on_tunnel_ready("127.0.0.1", self.device_port)
+            else:
+                # Process exited
+                stdout, stderr = self._iproxy_process.communicate()
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"iproxy failed: {error_msg}")
+                self.state = USBDeviceState.ERROR
+                
+                if self._on_tunnel_error:
+                    self._on_tunnel_error(f"iproxy failed: {error_msg}")
+                
+        except Exception as e:
+            logger.error(f"Failed to start iproxy: {e}")
+            self.state = USBDeviceState.ERROR
+            
+            if self._on_tunnel_error:
+                self._on_tunnel_error(str(e))
+    
+    def _start_pymobiledevice3_tunnel(self):
+        """Start tunnel using pymobiledevice3 TcpForwarder."""
+        if not TUNNEL_AVAILABLE or not self.current_device:
+            return
+        
+        try:
+            logger.info("Starting pymobiledevice3 TCP forwarder...")
+            
+            # Create lockdown for this device
+            lockdown = create_using_usbmux(serial=self.current_device.udid)
+            
+            # Start TCP forwarder
+            self._tcp_forwarder = TcpForwarder(
+                lockdown,
+                src_port=self.device_port,
+                dst_port=self.local_port
+            )
+            
+            # Start in background thread
+            def run_forwarder():
+                try:
+                    self._tcp_forwarder.start()
+                except Exception as e:
+                    logger.error(f"TCP forwarder error: {e}")
+            
+            self._forwarder_thread = threading.Thread(
+                target=run_forwarder,
+                daemon=True,
+                name="TcpForwarder"
+            )
+            self._forwarder_thread.start()
+            
+            time.sleep(0.5)  # Wait for forwarder to start
+            
+            logger.info(f"pymobiledevice3 tunnel active: {self.device_port} -> {self.local_port}")
+            self.state = USBDeviceState.TUNNEL_ACTIVE
+            
+            if self._on_tunnel_ready:
+                self._on_tunnel_ready("127.0.0.1", self.device_port)
+                
+        except Exception as e:
+            logger.error(f"Failed to start pymobiledevice3 tunnel: {e}")
+            self.state = USBDeviceState.ERROR
+            
+            if self._on_tunnel_error:
+                self._on_tunnel_error(f"Tunnel failed: {e}")
+    
+    def _stop_iproxy(self):
+        """Stop iproxy process and any forwarders."""
+        if self._iproxy_process:
+            try:
+                self._iproxy_process.terminate()
+                self._iproxy_process.wait(timeout=2.0)
+            except Exception as e:
+                logger.debug(f"iproxy stop error: {e}")
+                try:
+                    self._iproxy_process.kill()
+                except:
+                    pass
+            self._iproxy_process = None
+        
+        # Stop pymobiledevice3 forwarder if active
+        if hasattr(self, '_tcp_forwarder') and self._tcp_forwarder:
+            try:
+                self._tcp_forwarder.close()
+            except Exception:
+                pass
+            self._tcp_forwarder = None
+    
+    def is_tunnel_active(self) -> bool:
+        """Check if USB tunnel is active."""
+        return self.state == USBDeviceState.TUNNEL_ACTIVE
+    
+    def get_status(self) -> dict:
+        """Get current tunnel status."""
+        deps = check_usb_dependencies()
+        
+        return {
+            'state': self.state.value,
+            'device': self.current_device.name if self.current_device else None,
+            'device_udid': self.current_device.udid if self.current_device else None,
+            'tunnel_active': self.is_tunnel_active(),
+            'iproxy_available': deps['iproxy'],
+            'iproxy_path': deps['iproxy_path'],
+            'pymobiledevice3': deps['pymobiledevice3'],
+            'local_port': self.local_port,
+            'device_port': self.device_port
+        }
+
+
+def get_all_connection_options(port: int = 8889) -> List[dict]:
+    """Get all available connection options."""
     options = []
     
-    # Get all network IPs
-    ips = get_all_network_ips()
+    # WiFi option
+    local_ip = get_local_ip()
+    options.append({
+        'type': 'wifi',
+        'name': 'WiFi Connection',
+        'address': local_ip,
+        'port': port,
+        'description': f'Connect via WiFi to {local_ip}:{port}'
+    })
     
-    for name, ip in ips:
-        # Determine connection type
-        if 'Wi-Fi' in name or 'WiFi' in name or 'Wireless' in name:
-            conn_type = "WiFi"
-            icon = "📶"
-        elif 'Ethernet' in name or 'Local Area' in name:
-            conn_type = "Ethernet"
-            icon = "🔌"
-        elif 'USB' in name or 'Apple' in name or 'iPhone' in name:
-            conn_type = "USB Network"
-            icon = "📱"
-        else:
-            conn_type = "Network"
-            icon = "🌐"
-        
-        options.append({
-            'name': name,
-            'type': conn_type,
-            'icon': icon,
-            'ip': ip,
-            'port': port,
-            'address': f"{ip}:{port}"
-        })
+    # USB option
+    deps = check_usb_dependencies()
+    usb_available = deps['iproxy'] or deps['pymobiledevice3']
+    
+    options.append({
+        'type': 'usb',
+        'name': 'USB Connection',
+        'address': '127.0.0.1',
+        'port': port,
+        'available': usb_available,
+        'device_detected': deps['device_detected'],
+        'description': 'Connect via USB cable (lower latency)'
+    })
     
     return options
 
 
-def check_usb_dependencies() -> Dict[str, bool]:
-    """Check if USB dependencies are installed."""
-    return {
-        'pymobiledevice3': PYMOBILEDEVICE3_AVAILABLE,
-        'itunes_drivers': _check_itunes_drivers(),
-    }
-
-
-def _check_itunes_drivers() -> bool:
-    """Check if iTunes/Apple drivers are installed (Windows)."""
-    if sys.platform != 'win32':
-        return True  # Not needed on other platforms
-    
-    try:
-        import winreg
-        # Check for Apple Mobile Device Support
-        try:
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Apple Inc.\Apple Mobile Device Support"
-            )
-            winreg.CloseKey(key)
-            return True
-        except FileNotFoundError:
-            pass
-        
-        # Alternative: check for MobileDevice.dll
-        import os
-        program_files = os.environ.get('ProgramFiles', 'C:\\Program Files')
-        amds_path = os.path.join(
-            program_files, 
-            'Common Files', 
-            'Apple', 
-            'Mobile Device Support'
-        )
-        return os.path.exists(amds_path)
-        
-    except Exception:
-        return False
-
-
-# Test function
+# Test
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
-    print("USB Connection Test")
+    print("USB Tunnel Test")
     print("=" * 50)
     
     # Check dependencies
     deps = check_usb_dependencies()
-    print(f"pymobiledevice3: {'✓' if deps['pymobiledevice3'] else '✗'}")
-    print(f"iTunes drivers: {'✓' if deps['itunes_drivers'] else '✗'}")
-    print()
+    print(f"\nDependencies:")
+    print(f"  pymobiledevice3: {'OK' if deps['pymobiledevice3'] else 'NOT FOUND'}")
+    print(f"  iproxy: {'OK' if deps['iproxy'] else 'NOT FOUND'} ({deps['iproxy_path']})")
+    print(f"  iTunes drivers: {'OK' if deps['itunes_drivers'] else 'NOT FOUND'}")
+    print(f"  Device detected: {'YES' if deps['device_detected'] else 'NO'}")
     
-    # Show connection options
-    print("Available Connection Options:")
-    print("-" * 50)
-    options = get_all_connection_options(8889)
+    if not deps['iproxy']:
+        print("\n" + "=" * 50)
+        print("TO ENABLE USB CONNECTION:")
+        print("1. Install Chocolatey (https://chocolatey.org/install)")
+        print("2. Run: choco install libimobiledevice")
+        print("3. Restart this application")
+        print("=" * 50)
+    
+    # Get connection options
+    options = get_all_connection_options()
+    print(f"\nConnection Options:")
     for opt in options:
-        print(f"  {opt['icon']} {opt['type']}: {opt['address']}")
-        print(f"      Interface: {opt['name']}")
-    print()
+        print(f"  {opt['name']}: {opt['address']}:{opt['port']}")
     
-    # Test device detection
-    if deps['pymobiledevice3']:
-        print("Checking for connected iOS devices...")
-        
-        def on_device_connected(device):
-            print(f"\n✓ Device connected: {device.name}")
-            print(f"  Model: {device.model}")
-            print(f"  iOS: {device.ios_version}")
-        
-        def on_device_disconnected():
-            print("\n✗ Device disconnected")
-        
-        def on_tunnel_ready(host, port):
-            print(f"\n✓ Ready to connect!")
-            print(f"  Use IP: {host}:{port} in iPhone app")
+    if deps['device_detected'] and deps['iproxy']:
+        print("\nStarting USB tunnel...")
         
         tunnel = USBTunnel(
             local_port=8889,
-            on_device_connected=on_device_connected,
-            on_device_disconnected=on_device_disconnected,
-            on_tunnel_ready=on_tunnel_ready
+            on_device_connected=lambda d: print(f"Device: {d.name}"),
+            on_tunnel_ready=lambda h, p: print(f"Tunnel ready: {h}:{p}")
         )
         
         tunnel.start()
         
-        print("Monitoring for devices...")
-        print("Connect your iPhone via USB cable")
-        print("Press Ctrl+C to stop\n")
-        
         try:
             while True:
-                info = tunnel.get_connection_info()
-                status = "📱 Connected" if info['device'] else "⌛ Waiting"
-                print(f"\r{status} - IP: {info['local_ip']}:{info['port']}", end='', flush=True)
+                status = tunnel.get_status()
+                print(f"\rTunnel: {status['state']}", end="", flush=True)
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("\n\nStopping...")
-        finally:
+            print("\nStopping...")
             tunnel.stop()
-    else:
-        print("Install pymobiledevice3 for USB device detection:")
-        print("  pip install pymobiledevice3")
+    elif deps['device_detected']:
+        print("\niPhone detected but iproxy not available.")
+        print("Install libimobiledevice to enable USB connection.")

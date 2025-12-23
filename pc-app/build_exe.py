@@ -64,12 +64,15 @@ def build():
         "--hidden-import=pynput",
         "--hidden-import=pynput.keyboard._win32",
         "--hidden-import=pynput.mouse._win32",
+        "--hidden-import=pymobiledevice3",
+        "--hidden-import=pymobiledevice3.usbmux",
+        "--hidden-import=pymobiledevice3.lockdown",
         
         # Collect all data for customtkinter
         "--collect-all=customtkinter",
         
-        # Add data files
-        f"--add-data={script_dir / 'config.json'};.",
+        # Note: config.json is NOT bundled - it will be created at runtime
+        # or copied manually to the same folder as the exe
         
         # Exclude unnecessary modules to reduce size
         "--exclude-module=matplotlib",
@@ -104,8 +107,30 @@ def build():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\nExecutable: {exe_path}")
             print(f"Size: {size_mb:.1f} MB")
+            
+            # Copy config.json to dist folder (external config)
+            config_src = script_dir / "config.json"
+            config_dst = dist_dir / "config.json"
+            if config_src.exists():
+                shutil.copy(config_src, config_dst)
+                print(f"✓ Copied config.json to dist folder")
+            
+            # Copy USB setup instructions
+            usb_readme = script_dir / "USB_SETUP.md"
+            if usb_readme.exists():
+                shutil.copy(usb_readme, dist_dir / "USB_SETUP.md")
+                print(f"✓ Copied USB_SETUP.md to dist folder")
+            
+            # Copy USB dependencies installer
+            usb_installer = script_dir / "install_usb_dependencies.bat"
+            if usb_installer.exists():
+                shutil.copy(usb_installer, dist_dir / "install_usb_dependencies.bat")
+                print(f"✓ Copied install_usb_dependencies.bat to dist folder")
+            
             print()
             print("To run: double-click VRStreaming.exe in the 'dist' folder")
+            print()
+            print("For USB connection, run install_usb_dependencies.bat as admin")
         
     except subprocess.CalledProcessError as e:
         print(f"\n✗ Build failed with error code {e.returncode}")

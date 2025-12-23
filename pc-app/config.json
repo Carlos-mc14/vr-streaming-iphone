@@ -22,10 +22,11 @@
     },
     "connection": {
         "mode": "usb",
-        "usb_port": 8888,
+        "usb_port": 8889,
         "wifi_host": "0.0.0.0",
         "wifi_port": 8889,
-        "buffer_size": 65536
+        "buffer_size": 65536,
+        "enable_usb_tunnel": true
     },
     "sensor_processing": {
         "sensitivity": {

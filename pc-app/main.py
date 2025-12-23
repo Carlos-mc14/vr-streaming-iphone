@@ -364,9 +364,10 @@ class VRStreamingApp:
                     encoded = self.video_encoder.encode_immediate(stereo_frame)
                     
                     if encoded:
-                        # Send to client
+                        # Send to client - send only the JPEG data, not the full frame header
+                        # The usb_server.send_frame() adds its own VRVI header
                         if self.usb_server.is_connected:
-                            self.usb_server.send_frame(encoded.to_bytes())
+                            self.usb_server.send_frame(encoded.data)
                         
                         # Update HTTP server with latest frame
                         if self.http_server:

@@ -11,6 +11,10 @@
 
 name: Build iOS App
 
+permissions:
+  contents: write  # Required for creating releases
+  actions: read
+
 on:
   push:
     branches: [ main, master, develop ]

@@ -32,6 +32,7 @@ from usb_server import USBServer, ConnectionMode, ConnectionState
 from sensor_processor import SensorProcessor, HeadTracker
 from gui import VRStreamingGUI
 from http_server import HTTPStreamServer
+from usb_tunnel import USBTunnel, get_local_ip, check_usb_dependencies
 
 # Configure logging
 def setup_logging(log_level: str = "INFO", save_logs: bool = True):
@@ -93,6 +94,7 @@ class VRStreamingApp:
         self.stereo_converter: Optional[StereoConverter] = None
         self.video_encoder: Optional[VideoEncoder] = None
         self.usb_server: Optional[USBServer] = None
+        self.usb_tunnel: Optional[USBTunnel] = None
         self.sensor_processor: Optional[SensorProcessor] = None
         self.head_tracker: Optional[HeadTracker] = None
         self.gui: Optional[VRStreamingGUI] = None
@@ -148,11 +150,12 @@ class VRStreamingApp:
                 }
             },
             "connection": {
-                "mode": "wifi",
-                "usb_port": 8888,
+                "mode": "usb",
+                "usb_port": 8889,
                 "wifi_host": "0.0.0.0",
                 "wifi_port": 8889,
-                "buffer_size": 65536
+                "buffer_size": 65536,
+                "enable_usb_tunnel": True
             },
             "sensor_processing": {
                 "sensitivity": {"yaw": 2.0, "pitch": 1.5, "roll": 1.0},
@@ -232,17 +235,27 @@ class VRStreamingApp:
         
         # USB/WiFi server
         logger.info("Initializing server...")
-        mode_str = conn_config.get('mode', 'wifi')
+        mode_str = conn_config.get('mode', 'usb')
         mode = ConnectionMode.USB if mode_str == 'usb' else (
             ConnectionMode.WIFI if mode_str == 'wifi' else ConnectionMode.AUTO
         )
         self.usb_server = USBServer(
             mode=mode,
-            usb_port=conn_config.get('usb_port', 8888),
+            usb_port=conn_config.get('usb_port', 8889),
             wifi_host=conn_config.get('wifi_host', '0.0.0.0'),
             wifi_port=conn_config.get('wifi_port', 8889),
             buffer_size=conn_config.get('buffer_size', 65536)
         )
+        
+        # USB Tunnel for direct USB cable connection
+        if conn_config.get('enable_usb_tunnel', True):
+            logger.info("Initializing USB tunnel...")
+            self.usb_tunnel = USBTunnel(
+                local_port=conn_config.get('wifi_port', 8889),
+                on_device_connected=self._on_usb_device_connected,
+                on_device_disconnected=self._on_usb_device_disconnected,
+                on_tunnel_ready=self._on_usb_tunnel_ready
+            )
         
         # Sensor processor
         logger.info("Initializing sensor processor...")
@@ -305,6 +318,26 @@ class VRStreamingApp:
         self.usb_server.set_on_disconnect(on_disconnect)
         self.usb_server.set_on_state_change(on_state_change)
         self.usb_server.set_on_sensor_data(on_sensor_data)
+    
+    def _on_usb_device_connected(self, device):
+        """Called when iOS device is connected via USB."""
+        logger.info(f"USB device connected: {device.name} ({device.model})")
+        if self.gui:
+            self.gui.log(f"📱 USB device detected: {device.name}")
+            self.gui.log(f"   Model: {device.model}, iOS: {device.ios_version}")
+    
+    def _on_usb_device_disconnected(self):
+        """Called when iOS device is disconnected."""
+        logger.info("USB device disconnected")
+        if self.gui:
+            self.gui.log("📱 USB device disconnected")
+    
+    def _on_usb_tunnel_ready(self, host: str, port: int):
+        """Called when USB tunnel is established."""
+        logger.info(f"USB tunnel ready at {host}:{port}")
+        if self.gui:
+            self.gui.log(f"✅ USB tunnel active!")
+            self.gui.log(f"   iPhone should connect to: 127.0.0.1:{port}")
     
     def _streaming_loop(self):
         """Main streaming loop running in background thread."""
@@ -414,6 +447,11 @@ class VRStreamingApp:
             if self.http_server:
                 self.http_server.start()
             
+            # Start USB tunnel for direct cable connection
+            if self.usb_tunnel:
+                self.usb_tunnel.start()
+                logger.info("USB tunnel monitoring started")
+            
             # Start streaming loop
             self._stop_event.clear()
             self._streaming_thread = threading.Thread(
@@ -428,9 +466,15 @@ class VRStreamingApp:
             
             if self.gui:
                 port = self.config['connection'].get('wifi_port', 8889)
+                local_ip = get_local_ip()
                 self.gui.log(f"Server listening on port {port}")
-                self.gui.log(f"Web preview: http://localhost:{port}")
-                self.gui.log(f"VR mode: http://localhost:{port}/vr")
+                self.gui.log(f"")
+                self.gui.log(f"📡 Connection Options:")
+                self.gui.log(f"   USB: Connect iPhone via USB-C, use 127.0.0.1:{port}")
+                self.gui.log(f"   WiFi: Use {local_ip}:{port}")
+                self.gui.log(f"")
+                self.gui.log(f"🌐 Web preview: http://localhost:{port}")
+                self.gui.log(f"   VR mode: http://localhost:{port}/vr")
             
         except Exception as e:
             logger.error(f"Failed to start streaming: {e}")
@@ -453,6 +497,9 @@ class VRStreamingApp:
             self._streaming_thread = None
         
         # Stop components
+        if self.usb_tunnel:
+            self.usb_tunnel.stop()
+        
         if self.http_server:
             self.http_server.stop()
         

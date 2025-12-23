@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Darwin
 
 /// Main content view
 struct ContentView: View {
@@ -15,8 +16,9 @@ struct ContentView: View {
     
     @State private var showSettings = false
     @State private var showConnectionSheet = true
-    @State private var serverAddress = "192.168.1.100"
+    @State private var serverAddress = "127.0.0.1"  // Default to localhost for USB
     @State private var serverPort = "8889"
+    @State private var connectionMode = "usb"  // "usb" or "wifi"
     
     var body: some View {
         ZStack {
@@ -195,26 +197,107 @@ struct ConnectionView: View {
             .disabled(streamingManager.connectionState == .connecting)
             .padding(.horizontal, 40)
             
+            // Connection Mode Selector
+            VStack(spacing: 10) {
+                Text("Connection Mode")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                
+                HStack(spacing: 20) {
+                    // USB Mode Button
+                    Button(action: {
+                        connectionMode = "usb"
+                        serverAddress = "127.0.0.1"
+                    }) {
+                        VStack {
+                            Image(systemName: "cable.connector")
+                                .font(.title2)
+                            Text("USB")
+                                .font(.caption)
+                        }
+                        .frame(width: 80, height: 60)
+                        .background(connectionMode == "usb" ? Color.blue : Color.gray.opacity(0.3))
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    
+                    // WiFi Mode Button
+                    Button(action: {
+                        connectionMode = "wifi"
+                        serverAddress = getWiFiAddress()
+                    }) {
+                        VStack {
+                            Image(systemName: "wifi")
+                                .font(.title2)
+                            Text("WiFi")
+                                .font(.caption)
+                        }
+                        .frame(width: 80, height: 60)
+                        .background(connectionMode == "wifi" ? Color.blue : Color.gray.opacity(0.3))
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                }
+            }
+            .padding(.horizontal, 40)
+            
             // Instructions
             VStack(spacing: 5) {
-                Text("Make sure:")
+                Text("Instructions:")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
                 
-                Text("• PC app is running")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                
-                Text("• Both devices on same network (WiFi)")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                
-                Text("• Or connected via USB cable")
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                if connectionMode == "usb" {
+                    Text("1. Connect iPhone to PC via USB-C cable")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("2. PC app is running and streaming")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("3. Keep address as 127.0.0.1")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    Text("1. Both devices on same WiFi network")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("2. Enter PC's IP address shown in app")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("3. PC app is running and streaming")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
             }
             .padding(.top, 20)
         }
+    }
+    
+    /// Get device's WiFi IP address for display
+    private func getWiFiAddress() -> String {
+        var address = "192.168.1.100"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return address }
+        defer { freeifaddrs(ifaddr) }
+        
+        var ptr = ifaddr
+        while ptr != nil {
+            defer { ptr = ptr?.pointee.ifa_next }
+            let interface = ptr?.pointee
+            let addrFamily = interface?.ifa_addr.pointee.sa_family
+            
+            if addrFamily == UInt8(AF_INET) {
+                let name = String(cString: (interface?.ifa_name)!)
+                if name == "en0" {  // WiFi interface
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(interface?.ifa_addr, socklen_t((interface?.ifa_addr.pointee.sa_len)!),
+                               &hostname, socklen_t(hostname.count), nil, socklen_t(0), NI_NUMERICHOST)
+                    address = String(cString: hostname)
+                }
+            }
+        }
+        return address
     }
 }
 

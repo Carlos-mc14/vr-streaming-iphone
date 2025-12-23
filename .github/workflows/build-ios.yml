@@ -1,0 +1,317 @@
+# VR Streaming iOS Build Workflow
+# ================================
+# Builds the iOS application and creates an IPA file
+# Note: For proper signing, you need to set up your own certificates
+#
+# Required Secrets:
+# - APPLE_CERTIFICATE_BASE64: Base64 encoded .p12 certificate
+# - APPLE_CERTIFICATE_PASSWORD: Password for the certificate
+# - APPLE_PROVISIONING_PROFILE_BASE64: Base64 encoded provisioning profile
+# - KEYCHAIN_PASSWORD: Password for the temporary keychain
+
+name: Build iOS App
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'ios-app/**'
+      - '.github/workflows/build-ios.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ios-app/**'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (debug/release)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+
+env:
+  XCODE_VERSION: '15.0'
+  IOS_DEPLOYMENT_TARGET: '15.0'
+  PROJECT_PATH: 'ios-app/VRStreaming.xcodeproj'
+  SCHEME_NAME: 'VRStreaming'
+  PRODUCT_NAME: 'VRStreaming'
+
+jobs:
+  build:
+    name: Build iOS App
+    runs-on: macos-14
+    
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # Select Xcode version
+      - name: Select Xcode version
+        run: |
+          sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
+          xcodebuild -version
+      
+      # Show available destinations
+      - name: Show available destinations
+        run: |
+          xcodebuild -project "${{ env.PROJECT_PATH }}" \
+            -scheme "${{ env.SCHEME_NAME }}" \
+            -showdestinations
+      
+      # Build for testing (no signing required)
+      - name: Build for Simulator (Debug)
+        if: github.event.inputs.build_type != 'release'
+        run: |
+          xcodebuild build \
+            -project "${{ env.PROJECT_PATH }}" \
+            -scheme "${{ env.SCHEME_NAME }}" \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+      
+      # Archive for release (requires signing)
+      - name: Archive for Release
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        run: |
+          # Create archive directory
+          mkdir -p build/Archives
+          
+          # Build archive (unsigned for ad-hoc distribution)
+          xcodebuild archive \
+            -project "${{ env.PROJECT_PATH }}" \
+            -scheme "${{ env.SCHEME_NAME }}" \
+            -configuration Release \
+            -archivePath build/Archives/${{ env.PRODUCT_NAME }}.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            || echo "Archive completed with warnings (expected for unsigned build)"
+      
+      # Create unsigned IPA for sideloading
+      - name: Create Unsigned IPA
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        run: |
+          # Create Payload directory
+          mkdir -p build/Payload
+          
+          # Find and copy the .app bundle
+          if [ -d "build/Archives/${{ env.PRODUCT_NAME }}.xcarchive/Products/Applications/${{ env.PRODUCT_NAME }}.app" ]; then
+            cp -r "build/Archives/${{ env.PRODUCT_NAME }}.xcarchive/Products/Applications/${{ env.PRODUCT_NAME }}.app" build/Payload/
+          elif [ -d "build/DerivedData/Build/Products/Release-iphoneos/${{ env.PRODUCT_NAME }}.app" ]; then
+            cp -r "build/DerivedData/Build/Products/Release-iphoneos/${{ env.PRODUCT_NAME }}.app" build/Payload/
+          else
+            # Build for device if archive failed
+            xcodebuild build \
+              -project "${{ env.PROJECT_PATH }}" \
+              -scheme "${{ env.SCHEME_NAME }}" \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath build/DerivedData \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO
+            
+            cp -r "build/DerivedData/Build/Products/Release-iphoneos/${{ env.PRODUCT_NAME }}.app" build/Payload/ || true
+          fi
+          
+          # Create IPA
+          if [ -d "build/Payload/${{ env.PRODUCT_NAME }}.app" ]; then
+            cd build
+            zip -r "${{ env.PRODUCT_NAME }}-unsigned.ipa" Payload
+            echo "IPA created successfully"
+            ls -la *.ipa
+          else
+            echo "Warning: Could not find .app bundle for IPA creation"
+          fi
+      
+      # Upload IPA artifact
+      - name: Upload IPA Artifact
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRStreaming-iOS-IPA
+          path: build/*.ipa
+          if-no-files-found: warn
+          retention-days: 30
+      
+      # Upload build logs on failure
+      - name: Upload Build Logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/DerivedData/Logs/
+            ~/Library/Developer/Xcode/DerivedData/*/Logs/
+          if-no-files-found: ignore
+
+  # Job for signed builds (requires secrets)
+  build-signed:
+    name: Build Signed IPA
+    runs-on: macos-14
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release')
+    needs: build
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Check for signing secrets
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" ] && \
+             [ -n "${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}" ]; then
+            echo "has_secrets=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_secrets=false" >> $GITHUB_OUTPUT
+            echo "Signing secrets not configured. Skipping signed build."
+          fi
+      
+      - name: Select Xcode version
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
+      
+      # Install certificate and provisioning profile
+      - name: Install Apple Certificate
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          # Decode certificate
+          echo -n "$CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          # Import certificate
+          security import $CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+      
+      - name: Install Provisioning Profile
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          # Create variables
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          
+          # Decode provisioning profile
+          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          
+          # Install provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+      
+      # Build and archive
+      - name: Build and Archive (Signed)
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          xcodebuild archive \
+            -project "${{ env.PROJECT_PATH }}" \
+            -scheme "${{ env.SCHEME_NAME }}" \
+            -configuration Release \
+            -archivePath build/Archives/${{ env.PRODUCT_NAME }}.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates
+      
+      # Export IPA
+      - name: Export Signed IPA
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          # Create export options plist
+          cat > build/ExportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+              <key>compileBitcode</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+          
+          xcodebuild -exportArchive \
+            -archivePath build/Archives/${{ env.PRODUCT_NAME }}.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/Export \
+            -allowProvisioningUpdates
+      
+      # Upload signed IPA
+      - name: Upload Signed IPA
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRStreaming-iOS-Signed-IPA
+          path: build/Export/*.ipa
+          if-no-files-found: warn
+          retention-days: 30
+      
+      # Cleanup keychain
+      - name: Cleanup Keychain
+        if: always() && steps.check-secrets.outputs.has_secrets == 'true'
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+  # Create release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build]
+    
+    steps:
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VRStreaming-iOS-IPA
+          path: ./artifacts
+        continue-on-error: true
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: hashFiles('artifacts/*.ipa') != ''
+        with:
+          tag_name: v${{ github.run_number }}
+          name: VR Streaming v${{ github.run_number }}
+          body: |
+            ## VR Streaming iOS App
+            
+            ### Installation with Sideloadly
+            1. Download the .ipa file below
+            2. Install [Sideloadly](https://sideloadly.io/)
+            3. Connect your iPhone via USB
+            4. Open Sideloadly and drag the .ipa file
+            5. Enter your Apple ID and click Start
+            
+            ### Notes
+            - This is an unsigned build for sideloading
+            - You may need to trust the developer in Settings > General > Device Management
+            - The app will need to be re-signed every 7 days with a free Apple ID
+            
+          files: |
+            artifacts/*.ipa
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,37 @@
+# VR Streaming PC Application - Dependencies
+# Python 3.10+ required
+
+# Screen Capture
+mss>=9.0.1                      # Fast cross-platform screen capture
+dxcam>=0.0.5                    # High-performance DirectX screen capture (Windows)
+
+# Image/Video Processing
+opencv-python>=4.8.0            # Image processing and encoding
+numpy>=1.24.0                   # Array manipulation
+Pillow>=10.0.0                  # Image handling
+
+# USB Communication via pymobiledevice3
+pymobiledevice3>=2.0.0          # iOS device communication over USB
+libusb>=1.0.26                  # Low-level USB access
+
+# Windows Integration
+pywin32>=306                    # Windows API for mouse/keyboard control
+pynput>=1.7.6                   # Cross-platform input control
+
+# GUI
+customtkinter>=5.2.0            # Modern tkinter-based GUI
+tkinter-tooltip>=2.1.0          # Tooltips for GUI elements
+
+# Networking (fallback WiFi mode)
+websockets>=11.0                # WebSocket for low-latency communication
+
+# Performance & Utilities
+psutil>=5.9.0                   # System monitoring
+colorama>=0.4.6                 # Colored terminal output
+
+# Video Encoding (optional H264)
+av>=10.0.0                      # PyAV for H264 encoding
+
+# Development
+pytest>=7.4.0                   # Testing
+black>=23.0.0                   # Code formatting

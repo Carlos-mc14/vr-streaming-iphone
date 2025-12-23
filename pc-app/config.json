@@ -1,0 +1,53 @@
+{
+    "video": {
+        "capture_fps": 60,
+        "output_resolution": {
+            "width": 1920,
+            "height": 1080
+        },
+        "quality": 85,
+        "encoder": "jpeg",
+        "use_dxcam": true,
+        "monitor_index": 0
+    },
+    "stereoscopic": {
+        "enabled": true,
+        "eye_separation": 63.0,
+        "fov": 100,
+        "barrel_distortion": {
+            "enabled": true,
+            "k1": 0.22,
+            "k2": 0.24
+        }
+    },
+    "connection": {
+        "mode": "usb",
+        "usb_port": 8888,
+        "wifi_host": "0.0.0.0",
+        "wifi_port": 8889,
+        "buffer_size": 65536
+    },
+    "sensor_processing": {
+        "sensitivity": {
+            "yaw": 2.0,
+            "pitch": 1.5,
+            "roll": 1.0
+        },
+        "smoothing": 0.3,
+        "deadzone": 0.02,
+        "invert_x": false,
+        "invert_y": false
+    },
+    "performance": {
+        "capture_threads": 2,
+        "encode_threads": 2,
+        "max_queue_size": 5,
+        "target_latency_ms": 16
+    },
+    "debug": {
+        "show_fps": true,
+        "show_latency": true,
+        "log_level": "INFO",
+        "save_logs": true
+    }
+}

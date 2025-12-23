@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Bundle Information -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>VR Streaming</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    
+    <!-- iOS Specific -->
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    
+    <!-- Launch Screen -->
+    <key>UILaunchScreen</key>
+    <dict/>
+    
+    <!-- Orientation - Lock to Landscape for VR -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    
+    <!-- Required Device Capabilities -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>accelerometer</string>
+        <string>gyroscope</string>
+        <string>metal</string>
+    </array>
+    
+    <!-- Status Bar -->
+    <key>UIStatusBarHidden</key>
+    <true/>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+    
+    <!-- Full Screen -->
+    <key>UIRequiresFullScreen</key>
+    <true/>
+    
+    <!-- Privacy - Motion Usage -->
+    <key>NSMotionUsageDescription</key>
+    <string>VR Streaming needs access to motion sensors for head tracking. This allows you to look around in VR by moving your head.</string>
+    
+    <!-- Privacy - Local Network Usage -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>VR Streaming needs to connect to your PC on the local network to receive video stream and send sensor data.</string>
+    
+    <!-- Bonjour Services (for network discovery) -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_vrstreaming._tcp</string>
+    </array>
+    
+    <!-- Background Modes (optional, for maintaining connection) -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>processing</string>
+    </array>
+    
+    <!-- App Transport Security -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    
+    <!-- Preferred Screen Edge Deferring -->
+    <key>UIPreferredScreenEdgesDeferringSystemGestures</key>
+    <array>
+        <string>UIRectEdgeAll</string>
+    </array>
+    
+    <!-- Disable Auto Lock for VR use -->
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+</dict>
+</plist>

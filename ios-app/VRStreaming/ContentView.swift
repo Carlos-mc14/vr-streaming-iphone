@@ -36,6 +36,7 @@ struct ContentView: View {
                 ConnectionView(
                     serverAddress: $serverAddress,
                     serverPort: $serverPort,
+                    connectionMode: $connectionMode,
                     onConnect: connect
                 )
             }
@@ -127,6 +128,7 @@ struct ConnectionView: View {
     
     @Binding var serverAddress: String
     @Binding var serverPort: String
+    @Binding var connectionMode: String
     let onConnect: () -> Void
     
     @EnvironmentObject var streamingManager: StreamingManager

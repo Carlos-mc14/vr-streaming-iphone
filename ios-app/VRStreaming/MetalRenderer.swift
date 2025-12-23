@@ -203,12 +203,14 @@ class MetalRenderer {
     }
     
     private func setupGeometry() {
-        // Full screen quad
+        // Full screen quad - texture coords: (0,0) = top-left, (1,1) = bottom-right
+        // Metal NDC: (-1,-1) = bottom-left, (1,1) = top-right
+        // So we need to map: bottom-left vertex gets texCoord (0,1), etc.
         let vertices: [Vertex] = [
-            Vertex(position: SIMD4<Float>(-1, -1, 0, 1), texCoord: SIMD2<Float>(0, 1)),
-            Vertex(position: SIMD4<Float>( 1, -1, 0, 1), texCoord: SIMD2<Float>(1, 1)),
-            Vertex(position: SIMD4<Float>( 1,  1, 0, 1), texCoord: SIMD2<Float>(1, 0)),
-            Vertex(position: SIMD4<Float>(-1,  1, 0, 1), texCoord: SIMD2<Float>(0, 0))
+            Vertex(position: SIMD4<Float>(-1, -1, 0, 1), texCoord: SIMD2<Float>(0, 1)),  // bottom-left
+            Vertex(position: SIMD4<Float>( 1, -1, 0, 1), texCoord: SIMD2<Float>(1, 1)),  // bottom-right
+            Vertex(position: SIMD4<Float>( 1,  1, 0, 1), texCoord: SIMD2<Float>(1, 0)),  // top-right
+            Vertex(position: SIMD4<Float>(-1,  1, 0, 1), texCoord: SIMD2<Float>(0, 0))   // top-left
         ]
         
         let indices: [UInt16] = [0, 1, 2, 0, 2, 3]

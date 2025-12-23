@@ -20,11 +20,13 @@ on:
     branches: [ main, master, develop ]
     paths:
       - 'ios-app/**'
+      - 'pc-app/**'
       - '.github/workflows/build-ios.yml'
   pull_request:
     branches: [ main, master ]
     paths:
       - 'ios-app/**'
+      - 'pc-app/**'
   workflow_dispatch:
     inputs:
       build_type:
@@ -277,12 +279,52 @@ jobs:
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
+  # Build Windows executable
+  build-windows:
+    name: Build Windows App
+    runs-on: windows-latest
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          cd pc-app
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build executable
+        run: |
+          cd pc-app
+          python build_exe.py
+      
+      - name: Create Windows ZIP
+        run: |
+          cd pc-app/dist
+          Compress-Archive -Path * -DestinationPath VRStreaming-Windows.zip
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRStreaming-Windows
+          path: pc-app/dist/VRStreaming-Windows.zip
+          retention-days: 30
+
   # Create release
   release:
     name: Create Release
     runs-on: ubuntu-latest
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    needs: [build]
+    needs: [build, build-windows]
     
     steps:
       - name: Download IPA artifact
@@ -292,29 +334,44 @@ jobs:
           path: ./artifacts
         continue-on-error: true
       
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VRStreaming-Windows
+          path: ./artifacts
+        continue-on-error: true
+      
+      - name: List artifacts
+        run: ls -la ./artifacts/
+      
       - name: Create Release
         uses: softprops/action-gh-release@v1
-        if: hashFiles('artifacts/*.ipa') != ''
         with:
           tag_name: v${{ github.run_number }}
           name: VR Streaming v${{ github.run_number }}
           body: |
-            ## VR Streaming iOS App
+            ## VR Streaming Release
             
-            ### Installation with Sideloadly
-            1. Download the .ipa file below
+            ### 📱 iOS App (iPhone)
+            1. Download `VRStreaming-unsigned.ipa`
             2. Install [Sideloadly](https://sideloadly.io/)
             3. Connect your iPhone via USB
             4. Open Sideloadly and drag the .ipa file
             5. Enter your Apple ID and click Start
             
+            ### 💻 Windows App (PC)
+            1. Download `VRStreaming-Windows.zip`
+            2. Extract the ZIP file
+            3. Run `VRStreaming.exe`
+            4. For USB connection, run `install_usb_dependencies.bat` as admin first
+            
             ### Notes
-            - This is an unsigned build for sideloading
-            - You may need to trust the developer in Settings > General > Device Management
-            - The app will need to be re-signed every 7 days with a free Apple ID
+            - iOS app needs re-signing every 7 days with free Apple ID
+            - Trust the developer in Settings > General > Device Management
             
           files: |
             artifacts/*.ipa
+            artifacts/*.zip
           draft: false
           prerelease: false
         env:

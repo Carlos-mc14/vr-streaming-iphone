@@ -62,6 +62,7 @@ class MetalVRCoordinator: NSObject, MTKViewDelegate {
     private let streamingManager: StreamingManager
     private var renderer: MetalRenderer?
     private var viewSize: CGSize
+    private var lastFrameHash: Int = 0
     
     init(streamingManager: StreamingManager, size: CGSize) {
         self.streamingManager = streamingManager
@@ -92,14 +93,19 @@ class MetalVRCoordinator: NSObject, MTKViewDelegate {
         
         // Get current frame from streaming manager
         if let frameData = streamingManager.currentFrame {
-            renderer.updateTexture(with: frameData)
+            // Only update texture if frame changed
+            let newHash = frameData.hashValue
+            if newHash != lastFrameHash {
+                lastFrameHash = newHash
+                renderer.updateTexture(with: frameData)
+            }
         }
         
-        // Render frame
+        // Render frame - barrel distortion is already applied by PC, so disable here
         renderer.render(
             to: drawable,
             renderPassDescriptor: descriptor,
-            enableBarrelDistortion: true
+            enableBarrelDistortion: false  // PC already applies distortion
         )
     }
 }

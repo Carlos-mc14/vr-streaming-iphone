@@ -25,6 +25,9 @@ class MetalRenderer {
     
     private var videoTexture: MTLTexture?
     private var textureLoader: MTKTextureLoader
+    private var lastFrameHash: Int = 0  // To detect new frames
+    private let textureLock = NSLock()
+    private var pendingFrameData: Data?  // Frame waiting to be processed
     
     // MARK: - Geometry
     
@@ -244,14 +247,42 @@ class MetalRenderer {
     
     /// Update video texture with new JPEG data
     func updateTexture(with jpegData: Data) {
+        // Quick hash check to avoid reprocessing same frame
+        let newHash = jpegData.hashValue
+        
+        textureLock.lock()
+        if newHash == lastFrameHash {
+            textureLock.unlock()
+            return
+        }
+        lastFrameHash = newHash
+        textureLock.unlock()
+        
+        // Validate JPEG data
+        guard jpegData.count > 2 else {
+            print("[MetalRenderer] Invalid frame data size: \(jpegData.count)")
+            return
+        }
+        
+        // Check JPEG magic bytes (FFD8)
+        let magic = jpegData.prefix(2)
+        if magic != Data([0xFF, 0xD8]) {
+            print("[MetalRenderer] Not a JPEG: magic=\(magic.map { String(format: "%02X", $0) }.joined())")
+            return
+        }
+        
+        // Create texture synchronously (MTKTextureLoader is optimized for this)
         do {
-            // Decode JPEG and create texture
             let options: [MTKTextureLoader.Option: Any] = [
                 .generateMipmaps: false,
                 .SRGB: false
             ]
             
-            videoTexture = try textureLoader.newTexture(data: jpegData, options: options)
+            let newTexture = try textureLoader.newTexture(data: jpegData, options: options)
+            
+            textureLock.lock()
+            videoTexture = newTexture
+            textureLock.unlock()
             
         } catch {
             print("[MetalRenderer] Failed to create texture: \(error)")
@@ -270,10 +301,17 @@ class MetalRenderer {
               let vertexBuffer = vertexBuffer,
               let indexBuffer = indexBuffer,
               let uniformBuffer = uniformBuffer,
-              let samplerState = samplerState,
-              let texture = videoTexture else {
+              let samplerState = samplerState else {
             return
         }
+        
+        // Get texture with lock
+        textureLock.lock()
+        guard let texture = videoTexture else {
+            textureLock.unlock()
+            return
+        }
+        textureLock.unlock()
         
         // Update uniforms
         var uniforms = Uniforms(

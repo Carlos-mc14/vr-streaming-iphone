@@ -55,11 +55,26 @@ class StreamingManager: ObservableObject {
     @Published var showError: Bool = false
     @Published var errorMessage: String = ""
     @Published var serverAddress: String = ""
+    @Published var frameUpdateCounter: Int = 0  // Triggers view updates
     
     // MARK: - Frame Data
     
-    /// Current video frame data (JPEG)
-    private(set) var currentFrame: Data?
+    /// Current video frame data (JPEG) - thread-safe access
+    private var _currentFrame: Data?
+    private let frameLock = NSLock()
+    
+    var currentFrame: Data? {
+        get {
+            frameLock.lock()
+            defer { frameLock.unlock() }
+            return _currentFrame
+        }
+        set {
+            frameLock.lock()
+            _currentFrame = newValue
+            frameLock.unlock()
+        }
+    }
     
     /// Frame update callback
     var onFrameReceived: ((Data) -> Void)?
@@ -246,9 +261,12 @@ class StreamingManager: ObservableObject {
             guard magic == FrameHeader.magicVideo ||
                   magic == FrameHeader.magicCommand else {
                 // Invalid magic, try to resync
+                print("[StreamingManager] Invalid magic: 0x\(String(format: "%08X", magic)), buffer size: \(receiveBuffer.count)")
                 if let index = findNextMagic() {
+                    print("[StreamingManager] Resyncing, skipping \(index) bytes")
                     receiveBuffer.removeSubrange(0..<index)
                 } else {
+                    print("[StreamingManager] No valid magic found, clearing buffer")
                     receiveBuffer.removeAll()
                 }
                 continue
@@ -263,6 +281,13 @@ class StreamingManager: ObservableObject {
             }
             
             let totalLength = FrameHeader.headerSize + Int(dataLength)
+            
+            // Sanity check on data length
+            if dataLength > 10_000_000 {  // Max 10MB per frame
+                print("[StreamingManager] Invalid frame length: \(dataLength), resyncing")
+                receiveBuffer.removeFirst()
+                continue
+            }
             
             // Check if we have complete packet
             guard receiveBuffer.count >= totalLength else {
@@ -298,7 +323,21 @@ class StreamingManager: ObservableObject {
     }
     
     private func processVideoFrame(_ data: Data) {
-        // Update frame
+        // Validate JPEG data - must start with FFD8 (JPEG magic)
+        guard data.count > 2 else {
+            print("[StreamingManager] Frame too small: \(data.count) bytes")
+            return
+        }
+        
+        // Check JPEG magic bytes
+        let jpegMagic = data.prefix(2)
+        if jpegMagic != Data([0xFF, 0xD8]) {
+            print("[StreamingManager] Invalid JPEG magic: \(jpegMagic.map { String(format: "%02X", $0) }.joined())")
+            return
+        }
+        
+        // Update frame (thread-safe via property)
+        currentFrame = data
         currentFrame = data
         
         // Calculate metrics
@@ -306,20 +345,22 @@ class StreamingManager: ObservableObject {
         frameCount += 1
         
         // Calculate latency (time since last frame)
-        latencyMs = now.timeIntervalSince(lastFrameTime) * 1000
+        let latency = now.timeIntervalSince(lastFrameTime) * 1000
         lastFrameTime = now
         
         // Update FPS every second
         if now.timeIntervalSince(lastFPSUpdate) >= 1.0 {
             DispatchQueue.main.async {
                 self.currentFPS = Double(self.frameCount)
+                self.latencyMs = latency
             }
             frameCount = 0
             lastFPSUpdate = now
         }
         
-        // Notify callback
+        // Notify callback and trigger UI update
         DispatchQueue.main.async {
+            self.frameUpdateCounter += 1  // Trigger SwiftUI updates
             self.onFrameReceived?(data)
         }
     }

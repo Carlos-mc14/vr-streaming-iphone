@@ -363,9 +363,11 @@ class VRStreamingApp:
         logger.info("Streaming loop started")
         
         frame_count = 0
+        sent_count = 0
         start_time = time.time()
         last_metrics_update = time.time()
         last_preview_update = time.time()
+        last_log_time = time.time()
         
         while not self._stop_event.is_set():
             try:
@@ -373,6 +375,8 @@ class VRStreamingApp:
                 frame = self.screen_capture.get_frame(timeout=0.05)
                 
                 if frame is not None:
+                    frame_count += 1
+                    
                     # Convert to stereoscopic
                     if self.config.get('stereoscopic', {}).get('enabled', True):
                         stereo_frame = self.stereo_converter.convert_to_stereo(frame)
@@ -386,13 +390,12 @@ class VRStreamingApp:
                         # Send to client - send only the JPEG data, not the full frame header
                         # The usb_server.send_frame() adds its own VRVI header
                         if self.usb_server.is_connected:
-                            self.usb_server.send_frame(encoded.data)
+                            if self.usb_server.send_frame(encoded.data):
+                                sent_count += 1
                         
                         # Update HTTP server with latest frame
                         if self.http_server:
                             self.http_server.set_frame(encoded.data)
-                        
-                        frame_count += 1
                     
                     # Update GUI preview (throttled to ~15 FPS)
                     current_time = time.time()
@@ -404,8 +407,14 @@ class VRStreamingApp:
                                 pass  # GUI might be closed
                         last_preview_update = current_time
                 
-                # Update metrics periodically
+                # Log stats every 5 seconds
                 current_time = time.time()
+                if current_time - last_log_time >= 5.0:
+                    elapsed = current_time - start_time
+                    logger.info(f"Streaming stats: {frame_count} frames captured, {sent_count} sent, {frame_count/elapsed:.1f} FPS avg")
+                    last_log_time = current_time
+                
+                # Update metrics periodically
                 if current_time - last_metrics_update >= 0.5:
                     self._update_metrics(frame_count, start_time)
                     last_metrics_update = current_time
@@ -417,10 +426,10 @@ class VRStreamingApp:
                         self.http_server.set_metrics(self._metrics.copy())
                 
             except Exception as e:
-                logger.error(f"Streaming loop error: {e}")
+                logger.error(f"Streaming loop error: {e}", exc_info=True)
                 time.sleep(0.01)
         
-        logger.info("Streaming loop stopped")
+        logger.info(f"Streaming loop stopped. Total: {frame_count} frames captured, {sent_count} sent")
     
     def _update_metrics(self, frame_count: int, start_time: float):
         """Update performance metrics."""

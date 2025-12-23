@@ -477,6 +477,9 @@ class USBServer:
     
     def _send_loop(self):
         """Send data to client."""
+        logger.info("Send loop started")
+        send_count = 0
+        
         while self._running and self._client_socket:
             try:
                 # Get data from queue
@@ -487,8 +490,20 @@ class USBServer:
                     try:
                         self._client_socket.sendall(data)
                         self.bytes_sent += len(data)
+                        send_count += 1
+                        
+                        # Log every 60 frames (about 1 second at 60fps)
+                        if send_count % 60 == 0:
+                            logger.debug(f"Sent {send_count} packets, {self.bytes_sent / 1024 / 1024:.1f} MB total")
+                            
                     except BrokenPipeError:
                         logger.warning("Broken pipe - client disconnected")
+                        break
+                    except ConnectionResetError:
+                        logger.warning("Connection reset - client disconnected")
+                        break
+                    except ConnectionAbortedError:
+                        logger.warning("Connection aborted - client disconnected")
                         break
                     except Exception as e:
                         logger.error(f"Send error: {e}")
@@ -499,18 +514,25 @@ class USBServer:
             except Exception as e:
                 logger.error(f"Send loop error: {e}")
                 break
+        
+        logger.info(f"Send loop ended. Total packets sent: {send_count}")
     
     def send_frame(self, frame_data: bytes) -> bool:
         """
         Send a video frame to the client.
         
         Args:
-            frame_data: Encoded frame bytes
+            frame_data: Encoded frame bytes (raw JPEG data)
             
         Returns:
             True if queued successfully
         """
         if self.state != ConnectionState.CONNECTED:
+            return False
+        
+        # Validate JPEG data
+        if len(frame_data) < 2 or frame_data[:2] != b'\xff\xd8':
+            logger.warning(f"Invalid JPEG data: size={len(frame_data)}, magic={frame_data[:2].hex() if len(frame_data) >= 2 else 'N/A'}")
             return False
         
         try:
@@ -524,19 +546,29 @@ class USBServer:
             
             packet = header + frame_data
             
-            # Queue for sending
+            # Queue for sending - drop old frames if queue is full
             try:
+                # Try to put without blocking
                 self._send_queue.put_nowait(packet)
                 self.frames_sent += 1
                 return True
             except Full:
-                # Drop oldest frame
+                # Queue is full - drop oldest frame and add new one
+                dropped = 0
+                while not self._send_queue.empty():
+                    try:
+                        self._send_queue.get_nowait()
+                        dropped += 1
+                    except Empty:
+                        break
+                
                 try:
-                    self._send_queue.get_nowait()
                     self._send_queue.put_nowait(packet)
                     self.frames_sent += 1
+                    if dropped > 0:
+                        logger.debug(f"Dropped {dropped} old frames to add new one")
                     return True
-                except:
+                except Full:
                     return False
                     
         except Exception as e:

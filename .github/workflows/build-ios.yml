@@ -68,7 +68,7 @@ jobs:
       
       # Build for testing (no signing required)
       - name: Build for Simulator (Debug)
-        if: github.event.inputs.build_type != 'release'
+        if: github.event.inputs.build_type == 'debug'
         run: |
           xcodebuild build \
             -project "${{ env.PROJECT_PATH }}" \
@@ -82,7 +82,7 @@ jobs:
       
       # Archive for release (requires signing)
       - name: Archive for Release
-        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           # Create archive directory
           mkdir -p build/Archives
@@ -102,7 +102,7 @@ jobs:
       
       # Create unsigned IPA for sideloading
       - name: Create Unsigned IPA
-        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           # Create Payload directory
           mkdir -p build/Payload
@@ -139,7 +139,7 @@ jobs:
       
       # Upload IPA artifact
       - name: Upload IPA Artifact
-        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main'
+        if: github.event.inputs.build_type == 'release' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: actions/upload-artifact@v4
         with:
           name: VRStreaming-iOS-IPA
@@ -163,7 +163,7 @@ jobs:
     name: Build Signed IPA
     runs-on: macos-14
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release')
     needs: build
     

@@ -178,17 +178,13 @@ class USBServer:
             self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._server_socket.settimeout(1.0)
             
-            # Bind to appropriate host/port
-            if self.mode == ConnectionMode.USB:
-                # For USB, bind to localhost only
-                self._server_socket.bind(('127.0.0.1', self.usb_port))
-            else:
-                # For WiFi/Auto, bind to all interfaces
-                self._server_socket.bind((self.wifi_host, self.wifi_port))
+            # Always bind to all interfaces for flexibility
+            # USB tunnel will forward iPhone's localhost to PC's port
+            self._server_socket.bind((self.wifi_host, self.wifi_port))
             
             self._server_socket.listen(1)
             
-            port = self.usb_port if self.mode == ConnectionMode.USB else self.wifi_port
+            port = self.wifi_port
             logger.info(f"Server listening on port {port}")
             
             self._running = True

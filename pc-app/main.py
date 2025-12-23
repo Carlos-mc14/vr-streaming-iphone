@@ -31,6 +31,7 @@ from video_encoder import VideoEncoder, EncoderType
 from usb_server import USBServer, ConnectionMode, ConnectionState
 from sensor_processor import SensorProcessor, HeadTracker
 from gui import VRStreamingGUI
+from http_server import HTTPStreamServer
 
 # Configure logging
 def setup_logging(log_level: str = "INFO", save_logs: bool = True):
@@ -95,6 +96,7 @@ class VRStreamingApp:
         self.sensor_processor: Optional[SensorProcessor] = None
         self.head_tracker: Optional[HeadTracker] = None
         self.gui: Optional[VRStreamingGUI] = None
+        self.http_server: Optional[HTTPStreamServer] = None
         
         # State
         self.is_running = False
@@ -258,6 +260,10 @@ class VRStreamingApp:
             update_rate=60
         )
         
+        # HTTP Server for web preview
+        logger.info("Initializing HTTP server...")
+        self.http_server = HTTPStreamServer(port=conn_config.get('wifi_port', 8889))
+        
         # Set up callbacks
         self._setup_callbacks()
         
@@ -307,6 +313,7 @@ class VRStreamingApp:
         frame_count = 0
         start_time = time.time()
         last_metrics_update = time.time()
+        last_preview_update = time.time()
         
         while not self._stop_event.is_set():
             try:
@@ -328,7 +335,21 @@ class VRStreamingApp:
                         if self.usb_server.is_connected:
                             self.usb_server.send_frame(encoded.to_bytes())
                         
+                        # Update HTTP server with latest frame
+                        if self.http_server:
+                            self.http_server.set_frame(encoded.data)
+                        
                         frame_count += 1
+                    
+                    # Update GUI preview (throttled to ~15 FPS)
+                    current_time = time.time()
+                    if current_time - last_preview_update >= 0.066:
+                        if self.gui:
+                            try:
+                                self.gui.update_preview(stereo_frame)
+                            except Exception:
+                                pass  # GUI might be closed
+                        last_preview_update = current_time
                 
                 # Update metrics periodically
                 current_time = time.time()
@@ -336,9 +357,11 @@ class VRStreamingApp:
                     self._update_metrics(frame_count, start_time)
                     last_metrics_update = current_time
                     
-                    # Update GUI
+                    # Update GUI and HTTP server metrics
                     if self.gui:
                         self.gui.update_metrics(self._metrics.copy())
+                    if self.http_server:
+                        self.http_server.set_metrics(self._metrics.copy())
                 
             except Exception as e:
                 logger.error(f"Streaming loop error: {e}")
@@ -388,6 +411,8 @@ class VRStreamingApp:
             self.video_encoder.start()
             self.usb_server.start()
             self.head_tracker.start()
+            if self.http_server:
+                self.http_server.start()
             
             # Start streaming loop
             self._stop_event.clear()
@@ -404,6 +429,8 @@ class VRStreamingApp:
             if self.gui:
                 port = self.config['connection'].get('wifi_port', 8889)
                 self.gui.log(f"Server listening on port {port}")
+                self.gui.log(f"Web preview: http://localhost:{port}")
+                self.gui.log(f"VR mode: http://localhost:{port}/vr")
             
         except Exception as e:
             logger.error(f"Failed to start streaming: {e}")
@@ -426,6 +453,9 @@ class VRStreamingApp:
             self._streaming_thread = None
         
         # Stop components
+        if self.http_server:
+            self.http_server.stop()
+        
         if self.head_tracker:
             self.head_tracker.stop()
         

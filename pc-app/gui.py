@@ -15,9 +15,12 @@ import os
 from typing import Optional, Callable
 from pathlib import Path
 import logging
+import io
 
 import customtkinter as ctk
 from tkinter import messagebox
+from PIL import Image, ImageTk
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -445,15 +448,21 @@ class VRStreamingGUI(ctk.CTk):
         """Create video preview area."""
         preview_frame = ctk.CTkFrame(parent, fg_color=("#1f2937", "#111827"))
         preview_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        preview_frame.grid_columnconfigure(0, weight=1)
+        preview_frame.grid_rowconfigure(0, weight=1)
         
-        # Preview label (placeholder for video)
-        self.preview_label = ctk.CTkLabel(
+        # Preview canvas for displaying images
+        self.preview_canvas = ctk.CTkLabel(
             preview_frame,
             text="📺 Video Preview\n(Start streaming to see preview)",
             font=ctk.CTkFont(size=14),
             text_color="#6b7280"
         )
-        self.preview_label.pack(expand=True, fill="both", padx=20, pady=20)
+        self.preview_canvas.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        
+        # Store reference to photo to prevent garbage collection
+        self._preview_photo = None
+        self._last_preview_update = 0
     
     def _create_controls(self, parent):
         """Create control buttons."""
@@ -639,6 +648,39 @@ class VRStreamingGUI(ctk.CTk):
     def update_metrics(self, metrics: dict):
         """Update metrics display with real data."""
         self.metrics_panel.update_metrics(metrics)
+    
+    def update_preview(self, frame: np.ndarray):
+        """Update preview with a new frame (numpy array in BGR format)."""
+        try:
+            current_time = time.time()
+            # Limit preview updates to 15 FPS to save CPU
+            if current_time - self._last_preview_update < 0.066:
+                return
+            self._last_preview_update = current_time
+            
+            # Convert BGR to RGB
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                frame_rgb = frame[:, :, ::-1]  # BGR to RGB
+            else:
+                frame_rgb = frame
+            
+            # Resize to fit preview (max 400px width)
+            h, w = frame_rgb.shape[:2]
+            max_width = 400
+            if w > max_width:
+                scale = max_width / w
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                pil_image = Image.fromarray(frame_rgb)
+                pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            else:
+                pil_image = Image.fromarray(frame_rgb)
+            
+            # Create PhotoImage and update label
+            self._preview_photo = ImageTk.PhotoImage(pil_image)
+            self.preview_canvas.configure(image=self._preview_photo, text="")
+        except Exception as e:
+            logger.error(f"Preview update error: {e}")
     
     def set_connection_status(self, status: str):
         """Update connection status indicator."""

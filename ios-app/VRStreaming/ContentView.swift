@@ -303,8 +303,18 @@ struct SettingsView: View {
                 
                 // Connection info
                 Section("Connection") {
-                    LabeledContent("Status", value: streamingManager.connectionState.displayName)
-                    LabeledContent("Server", value: streamingManager.serverAddress)
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(streamingManager.connectionState.displayName)
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Server")
+                        Spacer()
+                        Text(streamingManager.serverAddress)
+                            .foregroundColor(.secondary)
+                    }
                     
                     Button("Disconnect") {
                         streamingManager.disconnect()

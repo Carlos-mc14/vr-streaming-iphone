@@ -13,12 +13,12 @@ name: Build iOS App
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
     paths:
       - 'ios-app/**'
       - '.github/workflows/build-ios.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
     paths:
       - 'ios-app/**'
   workflow_dispatch:

@@ -139,8 +139,7 @@ class SensorManager: ObservableObject {
         
         // Set reference attitude on first update if not set
         if referenceAttitude == nil {
-            let attitudeCopy = motion.attitude
-            referenceAttitude = attitudeCopy.copy() as? CMAttitude
+            referenceAttitude = motion.attitude
         }
         
         // Get attitude relative to reference
@@ -203,8 +202,7 @@ class SensorManager: ObservableObject {
         
         // Reset reference to current attitude
         if let currentMotion = motionManager.deviceMotion {
-            let attitudeCopy = currentMotion.attitude
-            referenceAttitude = attitudeCopy.copy() as? CMAttitude
+            referenceAttitude = currentMotion.attitude
         } else {
             referenceAttitude = nil
         }

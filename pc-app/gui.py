@@ -274,11 +274,23 @@ class SettingsPanel(ctk.CTkFrame):
         
         setattr(self, f"slider_{key}", slider)
         setattr(self, f"value_{key}", value_label)
+        
+        # Debounce timer for this slider
+        setattr(self, f"_debounce_{key}", None)
     
     def _on_slider_change(self, key: str, value: float, label: ctk.CTkLabel):
-        """Handle slider change."""
+        """Handle slider change with debounce."""
         label.configure(text=f"{value:.1f}")
-        self._on_setting_change()
+        
+        # Cancel previous debounce timer
+        timer_attr = f"_debounce_{key}"
+        if hasattr(self, timer_attr):
+            timer = getattr(self, timer_attr)
+            if timer:
+                self.after_cancel(timer)
+        
+        # Set new debounce timer (300ms)
+        setattr(self, timer_attr, self.after(300, self._on_setting_change))
     
     def _on_mode_change(self, value: str):
         """Handle connection mode change."""
